@@ -530,12 +530,12 @@ export default function App() {
   const refresh = useCallback(async () => {
     try {
       const [healthResult, studentResult, slotResult, adminResult, availabilityResult, scheduleResult] = await Promise.all([
-        api("/health"),
-        api(`/students/${STUDENT_ID}/dashboard`),
-        api(`/slots?student_id=${STUDENT_ID}`),
-        api("/admin/overview"),
-        api(`/interviewer/availability?interviewer=${encodeURIComponent(INTERVIEWER)}`),
-        api(`/interviewer/schedule?date=${selectedDate}&interviewer=${encodeURIComponent(INTERVIEWER)}`),
+        api("https://grit-yehv.onrender.com/api/health"),
+        api(`https://grit-yehv.onrender.com/api/students/${STUDENT_ID}/dashboard`),
+        api(`https://grit-yehv.onrender.com/api/slots?student_id=${STUDENT_ID}`),
+        api("https://grit-yehv.onrender.com/api/admin/overview"),
+        api(`https://grit-yehv.onrender.com/api/interviewer/availability?interviewer=${encodeURIComponent(INTERVIEWER)}`),
+        api(`https://grit-yehv.onrender.com/api/interviewer/schedule?date=${selectedDate}&interviewer=${encodeURIComponent(INTERVIEWER)}`),
       ]);
       setHealth(healthResult);
       setDashboard(studentResult);
