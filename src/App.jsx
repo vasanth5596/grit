@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 const STUDENT_ID = "student";
 const INTERVIEWER = "Vasanth";
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+// const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+const API_BASE_URL = "https://grit-yehv.onrender.com";
 const BADGE_OPTIONS = ["AI Product", "AI Systems", "AI Models", "AI Robotics"].flatMap((track) =>
   ["Novice", "Specialist", "Expert", "Master", "Grand Master"].map((level) => `${track} · ${level}`),
 );
