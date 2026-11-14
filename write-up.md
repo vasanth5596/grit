@@ -2,17 +2,17 @@
 
 ## 1. Student journey and state transitions
 
-| State | Entry / transition |
-|---|---|
-| **Not eligible** | Required badge skill levels are incomplete or the student fails a programme eligibility check. Skill/eligibility sync makes them **Eligible to book**. |
-| **Eligible to book** | All badge skills are cleared and programme eligibility is confirmed. Student books an open slot → **Booked**. |
-| **Booked** | Slot is reserved and confirmation sent. Student may reschedule/cancel before the cutoff → **Eligible to book**; interview start → **In progress**. Slot cancellation by interviewer/admin → **Eligible to book** with a prompt to choose again. |
-| **In progress** | Interviewer has started the session. Interviewer records a decision → **Passed**, **Not passed**, or **Retake recommended**. |
-| **Passed** | Badge is awarded and dashboard/leaderboard update. Later verified malpractice flag → **Revoked** and badge/miles are recalculated with an audit record. |
-| **Not passed** | Feedback is visible. After a configurable cooldown and eligibility recheck → **Eligible to book** for another attempt. |
-| **Retake recommended** | Not a pass; feedback and retake guidance are visible. Student books another slot when ready → **Booked**. |
-| **No-show / cancelled** | No-show is recorded separately from an outcome; notify student and team, then allow rebooking under policy. Student cancellation returns to **Eligible to book**. |
-| **Revoked** | A verified malpractice decision nullifies the badge. Notify student, preserve the interview/result history, remove badge credit, and provide an appeal path. Not bookable for that badge while the flag stands. |
+| State                         | Entry / transition                                                                                                                                                                                                                                                   |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Not eligible**        | Required badge skill levels are incomplete or the student fails a programme eligibility check. Skill/eligibility sync makes them **Eligible to book**.                                                                                                         |
+| **Eligible to book**    | All badge skills are cleared and programme eligibility is confirmed. Student books an open slot → **Booked**.                                                                                                                                                 |
+| **Booked**              | Slot is reserved and confirmation sent. Student may reschedule/cancel before the cutoff → **Eligible to book**; interview start → **In progress**. Slot cancellation by interviewer/admin → **Eligible to book** with a prompt to choose again. |
+| **In progress**         | Interviewer has started the session. Interviewer records a decision → **Passed**, **Not passed**, or **Retake recommended**.                                                                                                                      |
+| **Passed**              | Badge is awarded and dashboard/leaderboard update. Later verified malpractice flag → **Revoked** and badge/miles are recalculated with an audit record.                                                                                                       |
+| **Not passed**          | Feedback is visible. After a configurable cooldown and eligibility recheck → **Eligible to book** for another attempt.                                                                                                                                        |
+| **Retake recommended**  | Not a pass; feedback and retake guidance are visible. Student books another slot when ready → **Booked**.                                                                                                                                                     |
+| **No-show / cancelled** | No-show is recorded separately from an outcome; notify student and team, then allow rebooking under policy. Student cancellation returns to **Eligible to book**.                                                                                              |
+| **Revoked**             | A verified malpractice decision nullifies the badge. Notify student, preserve the interview/result history, remove badge credit, and provide an appeal path. Not bookable for that badge while the flag stands.                                                      |
 
 States are badge-specific: a student can have different interview states for different track badges. Booking should use a transactional slot lock; only an eligible student can book, and a slot can have at most one active booking.
 
@@ -31,22 +31,19 @@ States are badge-specific: a student can have different interview states for dif
 
 ## 3. Data model
 
-- **Student**(`id`, `name`, `email`, `timezone`, `programme_status`)
-- **BadgeRequirement**(`badge_id`, `skill_id`, `required_level`); **StudentSkillClearance**(`student_id`, `skill_id`, `level`, `cleared_at`)
-- **EligibilitySnapshot**(`id`, `student_id`, `badge_id`, `eligible`, `reason`, `evaluated_at`, `source_version`) — auditable eligibility at booking/result time.
-- **Interviewer**(`id`, `name`, `active`); **AvailabilitySlot**(`id`, `interviewer_id`, `starts_at_utc`, `ends_at_utc`, `status`, `version`) — status: open/held/booked/blocked.
-- **InterviewBooking**(`id`, `student_id`, `badge_id`, `slot_id`, `status`, `booked_at`, `cancelled_at`, `cancel_reason`, `eligibility_snapshot_id`, `version`) — enforce one active booking per student+badge and one active booking per slot.
-- **InterviewOutcome**(`id`, `booking_id`, `decision`, `feedback`, `recorded_by`, `recorded_at`, `supersedes_id`) — decision: pass/fail/retake; append corrections instead of overwriting.
-- **Attendance**(`id`, `booking_id`, `student_status`, `interviewer_status`, `joined_at`, `left_at`, `notes`) — no-show is not an outcome.
-- **BadgeAward**(`id`, `student_id`, `badge_id`, `booking_id`, `status`, `awarded_at`, `revoked_at`); **MalpracticeCase**(`id`, `student_id`, `badge_id`, `status`, `decision_by`, `decided_at`, `reason`, `appeal_status`) — audited revocation links to the affected award.
-- **Notification**(`id`, `recipient_id`, `booking_id`, `type`, `channel`, `sent_at`, `delivery_status`); **AuditEvent**(`id`, `actor_id`, `entity_type`, `entity_id`, `action`, `before_json`, `after_json`, `created_at`).
+The current application uses four SQLAlchemy tables in PostgreSQL (Supabase in the deployed configuration):
 
-Use database constraints/transactions for slot exclusivity, an append-only audit trail for results and revocations, and role-based authorization for interviewer outcomes and team eligibility overrides.
+- **Student** (`students`): `id` (primary key), `name`, `email` (unique), `badge`, `eligible`, `skills_cleared`, `skills_required`, `created_at`.
+- **Interviewer** (`interviewers`): `id` (primary key), `name`, `email` (unique), `created_at`.
+- **AvailabilitySlot** (`availability_slots`): `id` (primary key), `interviewer` (name stored as text), `date`, `start`, `end`, `status`. An index covers (`date`, `status`). The interviewer name is not a foreign key to `interviewers`.
+- **Booking** (`bookings`): `id` (primary key), `student_id` (foreign key to `students.id`), `slot_id` (foreign key to `availability_slots.id`), `status`, nullable `outcome`, nullable `feedback`, `booked_at`, nullable `completed_at`. Partial unique indexes on `slot_id` and `student_id`, each where `status = 'booked'`, prevent a slot or student from having more than one active booking. Another index covers `status`.
 
-## Student messages (exact copy)
+The current schema does not have separate badge, skill-clearance, eligibility-snapshot, attendance, award, malpractice, notification, or audit-event tables. `badge` and eligibility/skill counts are stored directly on `students`; outcome and feedback are stored on `bookings`. The live PostgreSQL schema has no `CHECK` constraints for status or outcome values. Although [backend/schema.sql](./backend/schema.sql) declares such checks, they are not declared by the SQLAlchemy models and are not present in the inspected live database. Startup table creation does not migrate existing tables.
+
+## Student messages 
 
 1. **Ready:** “You’ve cleared every required skill for AI Product Mastery. Book your level clearance interview to complete this badge.”
 2. **Booked:** “Your interview is booked for [date] at [time] IST with [interviewer]. Join online a few minutes early. You can reschedule or cancel up to 24 hours before your interview.”
 3. **Passed:** “Congratulations, [first name] — you passed! Your AI Product Mastery Novice badge is now unlocked.”
 
-The prototype includes student booking and live status, interviewer availability and daily outcome recording, the eligible-student booking queue, and before/after-pass dashboard previews. Demo data and interactions are stored in the browser.
+The prototype includes student booking and live status, interviewer availability and daily outcome recording, the eligible-student booking queue, and before/after-pass dashboard previews. Application data and interactions are persisted through the FastAPI backend to the configured database (Supabase PostgreSQL in the deployed configuration; SQLite by default for local development).
