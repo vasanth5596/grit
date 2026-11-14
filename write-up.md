@@ -1,20 +1,22 @@
 # GRIT interview scheduling — product write-up
 
-## 1. Student journey and state transitions
+## 1. Target student journey and state transitions
+
+The state machine below describes intended product behavior; it is not a claim that every state or transition exists in the current prototype. The prototype supports eligibility checks when booking, booking and cancellation, and recording `pass`, `fail`, or `retake` outcomes with feedback. It does not implement eligibility synchronization, rescheduling, an in-progress state, attendance/no-show tracking, cooldowns, appeals, malpractice revocation, outbound notifications, or leaderboard updates.
 
 | State                         | Entry / transition                                                                                                                                                                                                                                                   |
 | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Not eligible**        | Required badge skill levels are incomplete or the student fails a programme eligibility check. Skill/eligibility sync makes them **Eligible to book**.                                                                                                         |
 | **Eligible to book**    | All badge skills are cleared and programme eligibility is confirmed. Student books an open slot → **Booked**.                                                                                                                                                 |
-| **Booked**              | Slot is reserved and confirmation sent. Student may reschedule/cancel before the cutoff → **Eligible to book**; interview start → **In progress**. Slot cancellation by interviewer/admin → **Eligible to book** with a prompt to choose again. |
+| **Booked**              | The slot is reserved and confirmation is shown in the application. The target product may allow rescheduling or cancellation according to a defined cutoff; the prototype supports cancellation before an outcome, but not rescheduling or a cutoff policy. Interview start → **In progress** is a target transition, not implemented. |
 | **In progress**         | Interviewer has started the session. Interviewer records a decision → **Passed**, **Not passed**, or **Retake recommended**.                                                                                                                      |
-| **Passed**              | Badge is awarded and dashboard/leaderboard update. Later verified malpractice flag → **Revoked** and badge/miles are recalculated with an audit record.                                                                                                       |
+| **Passed**              | Target: award the badge and update the dashboard/leaderboard. In the prototype, a recorded pass appears on the dashboard and prevents another booking for that student; there is no separate badge-award record or leaderboard. Later verified malpractice → **Revoked** is a target transition, not implemented. |
 | **Not passed**          | Feedback is visible. After a configurable cooldown and eligibility recheck → **Eligible to book** for another attempt.                                                                                                                                        |
 | **Retake recommended**  | Not a pass; feedback and retake guidance are visible. Student books another slot when ready → **Booked**.                                                                                                                                                     |
-| **No-show / cancelled** | No-show is recorded separately from an outcome; notify student and team, then allow rebooking under policy. Student cancellation returns to **Eligible to book**.                                                                                              |
-| **Revoked**             | A verified malpractice decision nullifies the badge. Notify student, preserve the interview/result history, remove badge credit, and provide an appeal path. Not bookable for that badge while the flag stands.                                                      |
+| **No-show / cancelled** | Target: record no-show separately from an outcome, notify the student and team, then allow rebooking under policy. The prototype supports student cancellation; it does not track no-shows or send notifications. |
+| **Revoked**             | Target: a verified malpractice decision nullifies the badge, preserves interview history, removes badge credit, and provides notice and an appeal path. This state is not implemented in the prototype. |
 
-States are badge-specific: a student can have different interview states for different track badges. Booking should use a transactional slot lock; only an eligible student can book, and a slot can have at most one active booking.
+The target model is badge-specific, so a student could have different interview states for different track badges. The prototype stores one badge string per student and enforces at most one active booking per student overall (not one per badge). In PostgreSQL, booking uses a row lock and database uniqueness constraints to prevent multiple active bookings for a slot or student.
 
 ## 2. Edge cases and assumptions
 
@@ -24,26 +26,26 @@ States are badge-specific: a student can have different interview states for dif
 - **No-show, late arrival, connectivity failure, interviewer absence:** record attendance separately from pass/fail; define a grace period and whether a free rebook is allowed. Do not infer failure from absence.
 - **Retake vs fail:** both are non-pass; retake is guidance, not a second result category implying eligibility. Policy must define attempt limits, cooldown, and appeal process.
 - **Result correction / malpractice after a pass:** require authorized, reasoned, timestamped changes; preserve old values. Keep badge revocation distinct from interview outcome and provide notice/appeal.
-- **Time zones and accessibility:** store UTC plus the student's/interviewer's zone; display the confirmed zone, provide accessible keyboard controls, captions/alternate accommodations, and reminders.
-- **Privacy and notifications:** disclose what feedback is visible, limit team access by role, and deliver booking/result messages in dashboard plus the configured notification channel.
+- **Time zones and accessibility:** the prototype stores interview dates and times as timezone-naive values and labels displayed times IST. For the target product, define timezone storage/conversion, display the confirmed zone, and provide accessible keyboard controls, captions/alternate accommodations, and reminders.
+- **Privacy and notifications:** the prototype has no login, role-based authorization, or outbound notification integration. For the target product, disclose what feedback is visible, limit team access by role, and deliver booking/result messages in the dashboard and configured notification channel.
 
-**Assumptions to confirm:** 30-minute online interviews; one active booking per student per badge; interview team owns eligibility overrides; student may rebook after a fail/retake; malpractice is a verified administrative decision, not an interviewer outcome. Cooldown, attendance grace period, retake limits, cancellation cutoff, appeal process, and notification channels need policy-owner sign-off.
+**Assumptions to confirm:** 30-minute online interviews; whether to support multiple badge tracks per student; interview team owns eligibility overrides; student may rebook after a fail/retake; malpractice is a verified administrative decision, not an interviewer outcome. The prototype uses 30-minute slots and currently allows only one active booking per student overall. Cooldown, attendance grace period, retake limits, cancellation cutoff, appeal process, and notification channels need policy-owner sign-off.
 
 ## 3. Data model
 
-The current application uses four SQLAlchemy tables in PostgreSQL (Supabase in the deployed configuration):
+The current application uses four SQLAlchemy tables. PostgreSQL is used when configured for the hosted deployment; SQLite is the local-development default:
 
 - **Student** (`students`): `id` (primary key), `name`, `email` (unique), `badge`, `eligible`, `skills_cleared`, `skills_required`, `created_at`.
 - **Interviewer** (`interviewers`): `id` (primary key), `name`, `email` (unique), `created_at`.
 - **AvailabilitySlot** (`availability_slots`): `id` (primary key), `interviewer` (name stored as text), `date`, `start`, `end`, `status`. An index covers (`date`, `status`). The interviewer name is not a foreign key to `interviewers`.
 - **Booking** (`bookings`): `id` (primary key), `student_id` (foreign key to `students.id`), `slot_id` (foreign key to `availability_slots.id`), `status`, nullable `outcome`, nullable `feedback`, `booked_at`, nullable `completed_at`. Partial unique indexes on `slot_id` and `student_id`, each where `status = 'booked'`, prevent a slot or student from having more than one active booking. Another index covers `status`.
 
-The current schema does not have separate badge, skill-clearance, eligibility-snapshot, attendance, award, malpractice, notification, or audit-event tables. `badge` and eligibility/skill counts are stored directly on `students`; outcome and feedback are stored on `bookings`. The live PostgreSQL schema has no `CHECK` constraints for status or outcome values. Although [backend/schema.sql](./backend/schema.sql) declares such checks, they are not declared by the SQLAlchemy models and are not present in the inspected live database. Startup table creation does not migrate existing tables.
+The current schema does not have separate badge, skill-clearance, eligibility-snapshot, attendance, award, malpractice, notification, or audit-event tables. `badge` and eligibility/skill counts are stored directly on `students`; outcome and feedback are stored on `bookings`. The SQLAlchemy models do not declare `CHECK` constraints for status or outcome values, while [backend/schema.sql](./backend/schema.sql) does. Startup `create_all()` creates missing tables but does not migrate existing tables, so do not assume the DDL checks exist in an already-created database without inspecting it.
 
-## Student messages 
+## Student-facing copy
 
-1. **Ready:** “You’ve cleared every required skill for AI Product Mastery. Book your level clearance interview to complete this badge.”
-2. **Booked:** “Your interview is booked for [date] at [time] IST with [interviewer]. Join online a few minutes early. You can reschedule or cancel up to 24 hours before your interview.”
-3. **Passed:** “Congratulations, [first name] — you passed! Your AI Product Mastery Novice badge is now unlocked.”
+1. **Ready (shown in the prototype):** “You’ve cleared every required skill for AI Product Mastery. Book your level clearance interview to complete this badge.”
+2. **Booked (suggested copy):** “Your interview is booked for [date] at [time] IST with [interviewer]. Join online a few minutes early.” The prototype shows booking confirmation in the dashboard; it does not send this message, offer rescheduling, or enforce a 24-hour cancellation cutoff.
+3. **Passed (dashboard preview):** “Congratulations, [first name] — you passed! Your AI Product Mastery Novice badge is now unlocked.” The prototype includes an “After pass” dashboard preview; selecting it previews the passed state and does not itself record an interview result.
 
-The prototype includes student booking and live status, interviewer availability and daily outcome recording, the eligible-student booking queue, and before/after-pass dashboard previews. Application data and interactions are persisted through the FastAPI backend to the configured database (Supabase PostgreSQL in the deployed configuration; SQLite by default for local development).
+The prototype includes student booking and live status, interviewer availability and daily outcome recording, student and interviewer directory management, the eligible-student booking queue, CSV roster export, and before/after-pass dashboard previews. Application data and interactions are persisted through the FastAPI backend to the configured database (PostgreSQL when configured for hosting; SQLite by default for local development).
